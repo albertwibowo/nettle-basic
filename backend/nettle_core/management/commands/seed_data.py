@@ -5,7 +5,11 @@ from django.core.files import File
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
-from portfolio.models import Client
+from portfolio.models import (
+    Client,
+    ClientFieldDefinition,
+    DEFAULT_CLIENT_FIELD_DEFINITIONS,
+)
 from assessments.models import Assessment
 from evidence.models import Evidence
 from reports.models import (
@@ -154,87 +158,99 @@ class Command(BaseCommand):
     help = "Seed the database with sample data"
 
     def handle(self, *args, **options):
-        # Always ensure the global default template exists, even when
-        # client/assessment sample data has already been seeded.
+        # Always ensure defaults exist, even when sample clients are already seeded.
         self._seed_default_template()
+        self._seed_client_field_definitions()
 
         if Client.objects.exists():
             self.stdout.write("Client data already exists, skipping sample clients.")
             return
 
-        # Create clients
+        # Create clients (customisable fields live in attributes)
         client1 = Client.objects.create(
             name="Hartfield Manufacturing Ltd",
-            contact_name="James Whitaker",
-            contact_email="j.whitaker@hartfield.co.uk",
-            contact_phone="+44 20 7946 0123",
-            industry="Manufacturing",
-            sub_industry="Metal Fabrication",
-            company_size="large",
-            annual_revenue=45000000.00,
-            employee_count=380,
-            year_established=1987,
-            address_line_1="Unit 4, Riverside Industrial Estate",
-            city="Sheffield",
-            state_province="South Yorkshire",
-            postal_code="S9 2PQ",
-            country="United Kingdom",
-            policy_number="HM-2024-00891",
-            broker_name="Marsh McLennan",
-            broker_contact="Sarah Patel",
-            coverage_type="Commercial Property",
-            total_insured_value=28000000.00,
-            risk_rating="medium",
-            previous_claims_count=2,
-            notes="Major renovation of Building B completed 2023. New fire suppression system installed.",
+            attributes={
+                "contact_name": "James Whitaker",
+                "contact_email": "j.whitaker@hartfield.co.uk",
+                "contact_phone": "+44 20 7946 0123",
+                "industry": "Manufacturing",
+                "sub_industry": "Metal Fabrication",
+                "company_size": "large",
+                "annual_revenue": 45000000.00,
+                "employee_count": 380,
+                "year_established": 1987,
+                "address_line_1": "Unit 4, Riverside Industrial Estate",
+                "city": "Sheffield",
+                "state_province": "South Yorkshire",
+                "postal_code": "S9 2PQ",
+                "country": "United Kingdom",
+                "policy_number": "HM-2024-00891",
+                "broker_name": "Marsh McLennan",
+                "broker_contact": "Sarah Patel",
+                "coverage_type": "Commercial Property",
+                "total_insured_value": 28000000.00,
+                "risk_rating": "medium",
+                "previous_claims_count": 2,
+                "notes": (
+                    "Major renovation of Building B completed 2023. "
+                    "New fire suppression system installed."
+                ),
+            },
         )
 
         client2 = Client.objects.create(
             name="Pacific Coast Logistics",
-            contact_name="Maria Chen",
-            contact_email="m.chen@paccoast.com",
-            contact_phone="+1 310 555 0147",
-            industry="Logistics",
-            sub_industry="Warehousing & Distribution",
-            company_size="enterprise",
-            annual_revenue=120000000.00,
-            employee_count=1200,
-            year_established=2001,
-            address_line_1="8500 Port Boulevard",
-            city="Long Beach",
-            state_province="California",
-            postal_code="90802",
-            country="United States",
-            policy_number="PCL-2024-03421",
-            broker_name="Aon",
-            broker_contact="David Kim",
-            coverage_type="Commercial Property & Cargo",
-            total_insured_value=95000000.00,
-            risk_rating="high",
-            previous_claims_count=5,
-            notes="Multiple warehouse locations. High-value cargo storage. Previous water damage claims.",
+            attributes={
+                "contact_name": "Maria Chen",
+                "contact_email": "m.chen@paccoast.com",
+                "contact_phone": "+1 310 555 0147",
+                "industry": "Logistics",
+                "sub_industry": "Warehousing & Distribution",
+                "company_size": "enterprise",
+                "annual_revenue": 120000000.00,
+                "employee_count": 1200,
+                "year_established": 2001,
+                "address_line_1": "8500 Port Boulevard",
+                "city": "Long Beach",
+                "state_province": "California",
+                "postal_code": "90802",
+                "country": "United States",
+                "policy_number": "PCL-2024-03421",
+                "broker_name": "Aon",
+                "broker_contact": "David Kim",
+                "coverage_type": "Commercial Property & Cargo",
+                "total_insured_value": 95000000.00,
+                "risk_rating": "high",
+                "previous_claims_count": 5,
+                "notes": (
+                    "Multiple warehouse locations. High-value cargo storage. "
+                    "Previous water damage claims."
+                ),
+            },
         )
 
         client3 = Client.objects.create(
             name="Greenfield Retail Group",
-            contact_name="Tom Bradley",
-            contact_email="t.bradley@greenfield.com",
-            contact_phone="+44 161 496 0234",
-            industry="Retail",
-            sub_industry="Shopping Centres",
-            company_size="enterprise",
-            annual_revenue=200000000.00,
-            employee_count=3500,
-            year_established=1995,
-            address_line_1="Greenfield House, 120 Deansgate",
-            city="Manchester",
-            state_province="Greater Manchester",
-            postal_code="M3 2GP",
-            country="United Kingdom",
-            coverage_type="Commercial Property",
-            total_insured_value=450000000.00,
-            risk_rating="medium",
-            previous_claims_count=1,
+            attributes={
+                "contact_name": "Tom Bradley",
+                "contact_email": "t.bradley@greenfield.com",
+                "contact_phone": "+44 161 496 0234",
+                "industry": "Retail",
+                "sub_industry": "Shopping Centres",
+                "company_size": "enterprise",
+                "annual_revenue": 200000000.00,
+                "employee_count": 3500,
+                "year_established": 1995,
+                "address_line_1": "Greenfield House, 120 Deansgate",
+                "city": "Manchester",
+                "state_province": "Greater Manchester",
+                "postal_code": "M3 2GP",
+                "country": "United Kingdom",
+                "coverage_type": "Commercial Property",
+                "total_insured_value": 450000000.00,
+                "risk_rating": "medium",
+                "previous_claims_count": 1,
+            },
         )
 
         # Create assessments
@@ -326,11 +342,36 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS("Seed data created successfully."))
 
+    def _seed_client_field_definitions(self):
+        """
+        Seed default ClientFieldDefinition rows mirroring the original Client
+        columns, if none exist yet (idempotent).
+        """
+        if ClientFieldDefinition.objects.exists():
+            self.stdout.write(
+                "Client field definitions already present, skipping."
+            )
+            return
+
+        ClientFieldDefinition.objects.bulk_create(
+            [
+                ClientFieldDefinition(**definition)
+                for definition in DEFAULT_CLIENT_FIELD_DEFINITIONS
+            ]
+        )
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Seeded {len(DEFAULT_CLIENT_FIELD_DEFINITIONS)} "
+                "client field definitions."
+            )
+        )
+
     def _seed_default_template(self):
         """
         Create the global default report template + version 1 with the
         standard 8-section structure, if one does not already exist.
         """
+
         existing = ReportTemplate.objects.filter(
             is_default=True, client__isnull=True
         ).first()
