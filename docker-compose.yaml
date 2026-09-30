@@ -15,6 +15,16 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
   backend:
     build: ./backend
     command: >
@@ -31,8 +41,30 @@ services:
     environment:
       DATABASE_URL: postgres://nettle:nettle@db:5432/nettle
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-sk-or-placeholder}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      NOTIFICATION_CHANNEL: ${NOTIFICATION_CHANNEL:-in_app}
     depends_on:
       db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    command: celery -A nettle_core worker -l info
+    volumes:
+      - ./backend:/app
+      - ./sample_evidence:/app/sample_evidence:ro
+      - media_data:/app/media
+    environment:
+      DATABASE_URL: postgres://nettle:nettle@db:5432/nettle
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-sk-or-placeholder}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      NOTIFICATION_CHANNEL: ${NOTIFICATION_CHANNEL:-in_app}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   frontend:
