@@ -1,5 +1,4 @@
 import json
-import re
 from django.db import transaction
 from django.db.models import Count, Q
 from django.http import StreamingHttpResponse
@@ -9,6 +8,11 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from openrouter import OpenRouter
+from openrouter.components import (
+    ChatFormatJSONSchemaConfig,
+    ChatJSONSchemaConfig,
+    ProviderPreferences,
+)
 
 from .models import (
     Report,
@@ -26,6 +30,52 @@ from .serializers import (
     ReportTemplateVersionCreateSerializer,
 )
 from evidence.models import Evidence
+
+# JSON Schema enforced via OpenRouter structured outputs for report generation.
+REPORT_ANSWERS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "answers": {
+            "type": "array",
+            "description": (
+                "One entry per template question. Include every question_id "
+                "from the prompt exactly once."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "question_id": {
+                        "type": "string",
+                        "description": "UUID of the template question being answered.",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "Professional risk-engineering answer. Use an empty "
+                            "string only if the evidence is insufficient."
+                        ),
+                    },
+                },
+                "required": ["question_id", "content"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["answers"],
+    "additionalProperties": False,
+}
+
+REPORT_ANSWERS_RESPONSE_FORMAT = ChatFormatJSONSchemaConfig(
+    type="json_schema",
+    json_schema=ChatJSONSchemaConfig(
+        name="report_answers",
+        strict=True,
+        schema_=REPORT_ANSWERS_SCHEMA,
+    ),
+)
+
+# Only route to providers that honor response_format / structured outputs.
+STRUCTURED_OUTPUT_PROVIDER = ProviderPreferences(require_parameters=True)
 
 
 class ReportTemplateViewSet(viewsets.ModelViewSet):
@@ -228,6 +278,8 @@ class ReportViewSet(viewsets.ModelViewSet):
                         model="inception/mercury-2.5",
                         max_tokens=8192,
                         messages=[{"role": "user", "content": prompt}],
+                        response_format=REPORT_ANSWERS_RESPONSE_FORMAT,
+                        provider=STRUCTURED_OUTPUT_PROVIDER,
                         stream=True,
                     ) as stream:
                         for event in stream:
@@ -240,9 +292,8 @@ class ReportViewSet(viewsets.ModelViewSet):
 
                 parsed = _parse_answers_json(full_content)
                 answers_by_question_id = {
-                    str(entry["question_id"]): entry.get("content", "")
-                    for entry in parsed.get("answers", [])
-                    if entry.get("question_id")
+                    entry["question_id"]: entry["content"]
+                    for entry in parsed["answers"]
                 }
 
                 answer_rows = list(
@@ -427,12 +478,7 @@ Evidence collected:
 Report template:
 {outline}
 
-Return ONLY valid JSON (no markdown fences, no commentary) shaped exactly like:
-{{
-  "answers": [
-    {{ "question_id": "<uuid>", "content": "..." }}
-  ]
-}}
+Respond using the enforced JSON schema (answers array of question_id + content).
 
 Rules:
 - Include every question_id from the template exactly once.
@@ -443,31 +489,34 @@ Rules:
 
 def _parse_answers_json(raw_text):
     """
-    Parse the model output into a dict with an `answers` list.
-    Strips markdown code fences if the model wrapped the JSON.
+    Parse structured-output JSON into a dict with an `answers` list.
+
+    OpenRouter enforces the schema via response_format; this validates the
+    assembled stream payload before persisting answers.
     """
     text = (raw_text or "").strip()
     if not text:
         raise ValueError("Model returned an empty response.")
 
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
-    if fence_match:
-        text = fence_match.group(1).strip()
-
     try:
         data = json.loads(text)
-    except json.JSONDecodeError:
-        # Attempt to extract the outermost JSON object if extra prose slipped in.
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError("Model response was not valid JSON.")
-        data = json.loads(text[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise ValueError("Model response was not valid JSON.") from exc
 
     if not isinstance(data, dict) or "answers" not in data:
         raise ValueError("Model JSON must contain an 'answers' array.")
     if not isinstance(data["answers"], list):
         raise ValueError("Model JSON 'answers' must be a list.")
+
+    for entry in data["answers"]:
+        if not isinstance(entry, dict):
+            raise ValueError("Each answer must be an object.")
+        if "question_id" not in entry or "content" not in entry:
+            raise ValueError("Each answer must include question_id and content.")
+        if not isinstance(entry["question_id"], str) or not isinstance(
+            entry["content"], str
+        ):
+            raise ValueError("question_id and content must be strings.")
 
     return data
 
