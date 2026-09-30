@@ -13,30 +13,36 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-gray-50 text-gray-900 min-h-screen">
-        <nav className="bg-white border-b border-gray-200 px-6 py-3">
+      <body className="bg-zinc-950 text-zinc-100 min-h-screen">
+        <nav className="bg-zinc-900 border-b border-zinc-800 px-6 py-3">
           <div className="max-w-7xl mx-auto flex items-center gap-8">
-            <Link href="/" className="font-bold text-lg">
+            <Link href="/" className="font-bold text-lg text-zinc-100">
               Nettle
             </Link>
             <div className="flex gap-6 text-sm">
               <Link
                 href="/portfolio"
-                className="text-gray-600 hover:text-gray-900"
+                className="text-zinc-400 hover:text-zinc-100"
               >
                 Portfolio
               </Link>
               <Link
                 href="/assessments"
-                className="text-gray-600 hover:text-gray-900"
+                className="text-zinc-400 hover:text-zinc-100"
               >
                 Assessments
               </Link>
               <Link
                 href="/reports"
-                className="text-gray-600 hover:text-gray-900"
+                className="text-zinc-400 hover:text-zinc-100"
               >
                 Reports
+              </Link>
+              <Link
+                href="/templates"
+                className="text-zinc-400 hover:text-zinc-100"
+              >
+                Templates
               </Link>
             </div>
           </div>

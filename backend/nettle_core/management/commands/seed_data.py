@@ -1,20 +1,165 @@
 from pathlib import Path
+from datetime import date
 
 from django.core.files import File
 from django.core.management.base import BaseCommand
+from django.db import transaction
+
 from portfolio.models import Client
 from assessments.models import Assessment
 from evidence.models import Evidence
-from reports.models import Report
-from datetime import date
+from reports.models import (
+    Report,
+    ReportQuestion,
+    ReportSection,
+    ReportTemplate,
+    ReportTemplateVersion,
+)
+
+
+# Default structured template: mirrors the original 8-section report outline.
+DEFAULT_TEMPLATE_SECTIONS = [
+    {
+        "title": "Executive Summary",
+        "instructions": (
+            "Provide a concise underwriter-facing overview of overall risk "
+            "posture and the most material findings."
+        ),
+        "order": 1,
+        "questions": [
+            {
+                "prompt": "Summarize the overall risk posture of the site.",
+                "guidance": "2–4 paragraphs; reference key evidence themes.",
+                "order": 1,
+            },
+            {
+                "prompt": "Highlight the most material findings for underwriters.",
+                "guidance": "Bullet-style prose is fine; prioritize severity.",
+                "order": 2,
+            },
+        ],
+    },
+    {
+        "title": "Site Overview",
+        "instructions": (
+            "Describe the site, occupancy, and operations relevant to risk."
+        ),
+        "order": 2,
+        "questions": [
+            {
+                "prompt": "Describe the site layout, occupancy, and operations.",
+                "guidance": "Include construction era / major renovations if known.",
+                "order": 1,
+            },
+            {
+                "prompt": "Note any site context that affects exposure (location, neighbours, access).",
+                "guidance": "",
+                "order": 2,
+            },
+        ],
+    },
+    {
+        "title": "Key Risk Findings",
+        "instructions": "Call out the primary hazards and control gaps observed.",
+        "order": 3,
+        "questions": [
+            {
+                "prompt": "List the key risk findings observed during the inspection.",
+                "guidance": "Be specific and cite evidence where possible.",
+                "order": 1,
+            },
+            {
+                "prompt": "Which findings pose the greatest immediate concern?",
+                "guidance": "Explain why, in underwriting terms.",
+                "order": 2,
+            },
+        ],
+    },
+    {
+        "title": "Fire Protection Assessment",
+        "instructions": (
+            "Assess detection, suppression, alarm systems, and related housekeeping."
+        ),
+        "order": 4,
+        "questions": [
+            {
+                "prompt": "Assess the adequacy of fire detection and suppression systems.",
+                "guidance": "Cover sprinklers, alarms, testing, and gaps.",
+                "order": 1,
+            },
+            {
+                "prompt": "What fire-related recommendations or deficiencies were noted?",
+                "guidance": "",
+                "order": 2,
+            },
+        ],
+    },
+    {
+        "title": "Structural Assessment",
+        "instructions": "Comment on building fabric, roof, and structural condition.",
+        "order": 5,
+        "questions": [
+            {
+                "prompt": "Assess the structural condition of the buildings inspected.",
+                "guidance": "Note age-related wear, renovations, and maintenance issues.",
+                "order": 1,
+            },
+        ],
+    },
+    {
+        "title": "Electrical Systems Assessment",
+        "instructions": "Cover panels, wiring practices, and electrical hazards.",
+        "order": 6,
+        "questions": [
+            {
+                "prompt": "Assess the condition and safety of electrical systems.",
+                "guidance": "Reference inspections, thermal scans, and observed hazards.",
+                "order": 1,
+            },
+            {
+                "prompt": "What electrical deficiencies or temporary wiring risks were observed?",
+                "guidance": "",
+                "order": 2,
+            },
+        ],
+    },
+    {
+        "title": "Recommendations",
+        "instructions": "Prioritized, actionable recommendations for risk improvement.",
+        "order": 7,
+        "questions": [
+            {
+                "prompt": "Provide prioritized recommendations to improve the risk profile.",
+                "guidance": "Distinguish urgent vs medium-term actions.",
+                "order": 1,
+            },
+        ],
+    },
+    {
+        "title": "Risk Rating",
+        "instructions": "Conclude with an overall risk rating and brief justification.",
+        "order": 8,
+        "questions": [
+            {
+                "prompt": "Assign an overall risk rating and justify it.",
+                "guidance": "Use Low / Medium / High (or similar) with clear rationale.",
+                "order": 1,
+            },
+        ],
+    },
+]
 
 
 class Command(BaseCommand):
     help = "Seed the database with sample data"
 
     def handle(self, *args, **options):
+        # Always ensure the global default template exists, even when
+        # client/assessment sample data has already been seeded.
+        self._seed_default_template()
+
         if Client.objects.exists():
-            self.stdout.write("Data already exists, skipping seed.")
+            self.stdout.write("Client data already exists, skipping sample clients.")
             return
 
         # Create clients
@@ -180,6 +325,71 @@ class Command(BaseCommand):
         )
 
         self.stdout.write(self.style.SUCCESS("Seed data created successfully."))
+
+    def _seed_default_template(self):
+        """
+        Create the global default report template + version 1 with the
+        standard 8-section structure, if one does not already exist.
+        """
+        existing = ReportTemplate.objects.filter(
+            is_default=True, client__isnull=True
+        ).first()
+        if existing and existing.versions.exists():
+            self.stdout.write(
+                f"Default template already present ({existing.name}), skipping."
+            )
+            return
+
+        with transaction.atomic():
+            template = existing or ReportTemplate.objects.create(
+                name="Standard Risk Report",
+                description=(
+                    "Global default risk engineering report covering executive "
+                    "summary through risk rating."
+                ),
+                client=None,
+                is_default=True,
+            )
+            if not template.is_default:
+                template.is_default = True
+                template.save(update_fields=["is_default", "updated_at"])
+
+            if template.versions.exists():
+                self.stdout.write(
+                    f"Default template '{template.name}' already has versions, skipping."
+                )
+                return
+
+            version = ReportTemplateVersion.objects.create(
+                template=template,
+                version_number=1,
+            )
+            for section_data in DEFAULT_TEMPLATE_SECTIONS:
+                questions_data = section_data["questions"]
+                section = ReportSection.objects.create(
+                    template_version=version,
+                    title=section_data["title"],
+                    instructions=section_data["instructions"],
+                    order=section_data["order"],
+                )
+                ReportQuestion.objects.bulk_create(
+                    [
+                        ReportQuestion(
+                            section=section,
+                            prompt=q["prompt"],
+                            guidance=q.get("guidance", ""),
+                            order=q["order"],
+                        )
+                        for q in questions_data
+                    ]
+                )
+
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"Seeded default template '{template.name}' v1 "
+                f"({len(DEFAULT_TEMPLATE_SECTIONS)} sections)."
+            )
+        )
 
     def _add_photos(self, assessment, photos):
         """Attach sample site photos, if the sample_evidence folder is mounted."""

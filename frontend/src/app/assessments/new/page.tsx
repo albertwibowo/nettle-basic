@@ -38,30 +38,36 @@ export default function NewAssessmentPage() {
     <div className="max-w-xl">
       <Link
         href="/assessments"
-        className="text-sm text-gray-500 hover:text-gray-700"
+        className="text-sm text-zinc-500 hover:text-zinc-300"
       >
         ← Assessments
       </Link>
-      <h1 className="text-2xl font-bold mt-1 mb-6">New Assessment</h1>
+      <h1 className="text-2xl font-bold mt-1 mb-6 text-zinc-100">
+        New Assessment
+      </h1>
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label className="block text-sm font-medium mb-1">Title</label>
+          <label className="block text-sm font-medium mb-1 text-zinc-300">
+            Title
+          </label>
           <input
             type="text"
             required
             value={form.title}
             onChange={(e) => setForm({ ...form, title: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">Client</label>
+          <label className="block text-sm font-medium mb-1 text-zinc-300">
+            Client
+          </label>
           <select
             required
             value={form.client}
             onChange={(e) => setForm({ ...form, client: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100"
           >
             <option value="">Select a client...</option>
             {clients.map((c) => (
@@ -72,37 +78,45 @@ export default function NewAssessmentPage() {
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">Site Address</label>
+          <label className="block text-sm font-medium mb-1 text-zinc-300">
+            Site Address
+          </label>
           <input
             type="text"
             value={form.site_address}
             onChange={(e) => setForm({ ...form, site_address: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">Assessor Name</label>
+          <label className="block text-sm font-medium mb-1 text-zinc-300">
+            Assessor Name
+          </label>
           <input
             type="text"
             value={form.assessor_name}
-            onChange={(e) => setForm({ ...form, assessor_name: e.target.value })}
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            onChange={(e) =>
+              setForm({ ...form, assessor_name: e.target.value })
+            }
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100"
           />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1">Date</label>
+          <label className="block text-sm font-medium mb-1 text-zinc-300">
+            Date
+          </label>
           <input
             type="date"
             value={form.assessment_date}
             onChange={(e) =>
               setForm({ ...form, assessment_date: e.target.value })
             }
-            className="w-full border border-gray-300 rounded px-3 py-2 text-sm"
+            className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100"
           />
         </div>
         <button
           type="submit"
-          className="bg-gray-900 text-white px-4 py-2 rounded text-sm hover:bg-gray-700"
+          className="bg-zinc-100 text-zinc-900 px-4 py-2 rounded text-sm hover:bg-white"
         >
           Create Assessment
         </button>
