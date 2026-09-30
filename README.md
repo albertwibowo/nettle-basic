@@ -6,7 +6,7 @@ A simplified version of the Nettle risk engineering platform. This app allows ri
 
 ```bash
 cp .env.example .env
-# Edit .env and add your Anthropic API key
+# Edit .env and add your OpenRouter API key
 
 docker compose up --build
 ```
@@ -22,7 +22,7 @@ The database is seeded with sample clients, assessments, and evidence on first r
 - **Backend**: Django + Django REST Framework (Python 3.11)
 - **Frontend**: Next.js 14 + TypeScript + Tailwind CSS
 - **Database**: PostgreSQL 15
-- **AI**: Anthropic Claude API for report generation
+- **AI**: OpenRouter API for report generation
 
 ## API Endpoints
 
