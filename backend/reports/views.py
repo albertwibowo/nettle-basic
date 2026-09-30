@@ -22,6 +22,7 @@ from .serializers import (
 )
 from .tasks import generate_report_task
 from evidence.models import Evidence
+from notifications.services import NotificationEvent, get_notifier
 
 
 class ReportTemplateViewSet(viewsets.ModelViewSet):
@@ -216,6 +217,15 @@ class ReportViewSet(viewsets.ModelViewSet):
             report.answers.update(status="generating")
 
         generate_report_task.delay(str(report.id))
+
+        get_notifier().notify(
+            NotificationEvent(
+                event_type="report.generation_started",
+                title="Report generation started",
+                message=f'"{report.title}" is being generated in the background.',
+                report_id=str(report.id),
+            )
+        )
 
         report.refresh_from_db()
         return Response(

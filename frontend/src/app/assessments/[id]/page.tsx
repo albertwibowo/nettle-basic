@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { apiFetch, apiPost, apiUpload, API_BASE } from "@/lib/api";
+import { apiFetch, apiPost, apiUpload } from "@/lib/api";
 
 interface Assessment {
   id: string;
@@ -49,6 +49,21 @@ interface VersionOption {
   section_count: number;
 }
 
+const REPORT_POLL_MS = 2000;
+
+function reportStatusClass(status: string) {
+  switch (status) {
+    case "completed":
+      return "text-emerald-400";
+    case "generating":
+      return "text-amber-400";
+    case "failed":
+      return "text-red-400";
+    default:
+      return "text-zinc-500";
+  }
+}
+
 export default function AssessmentDetailPage() {
   const { id } = useParams();
   const [assessment, setAssessment] = useState<Assessment | null>(null);
@@ -58,9 +73,11 @@ export default function AssessmentDetailPage() {
   const [versions, setVersions] = useState<VersionOption[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [selectedVersionId, setSelectedVersionId] = useState("");
-  const [generating, setGenerating] = useState(false);
-  const [streamContent, setStreamContent] = useState("");
-  const streamRef = useRef<HTMLDivElement>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  const refreshReports = () =>
+    apiFetch(`/api/reports/?assessment=${id}`).then(setReports);
 
   useEffect(() => {
     apiFetch(`/api/assessments/${id}/`).then((data: Assessment) => {
@@ -79,8 +96,18 @@ export default function AssessmentDetailPage() {
       );
     });
     apiFetch(`/api/evidence/?assessment=${id}`).then(setEvidence);
-    apiFetch(`/api/reports/?assessment=${id}`).then(setReports);
+    refreshReports();
   }, [id]);
+
+  // Poll while any report is generating
+  const hasGenerating = reports.some((r) => r.status === "generating");
+  useEffect(() => {
+    if (!hasGenerating) return;
+    const timer = setInterval(() => {
+      refreshReports();
+    }, REPORT_POLL_MS);
+    return () => clearInterval(timer);
+  }, [id, hasGenerating]);
 
   useEffect(() => {
     if (!selectedTemplateId) {
@@ -137,77 +164,40 @@ export default function AssessmentDetailPage() {
       return;
     }
 
-    // Create a new report pinned to the chosen template version
-    const report = await apiPost("/api/reports/", {
-      assessment: id,
-      title: "",
-      status: "pending",
-      template_version: selectedVersionId,
-    });
+    setSubmitting(true);
+    setStatusMessage(null);
 
-    setGenerating(true);
-    setStreamContent("");
+    try {
+      const report = await apiPost("/api/reports/", {
+        assessment: id,
+        title: "",
+        status: "pending",
+        template_version: selectedVersionId,
+      });
 
-    // Stream the generation via SSE; pass template_version so generate
-    // explicitly uses the user's choice even if create pinning is ignored.
-    const response = await fetch(
-      `${API_BASE}/api/reports/${report.id}/generate/`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          template: selectedTemplateId,
-          template_version: selectedVersionId,
-        }),
-      }
-    );
+      // 202 Accepted — generation runs in the background via Celery
+      await apiPost(`/api/reports/${report.id}/generate/`, {
+        template: selectedTemplateId,
+        template_version: selectedVersionId,
+      });
 
-    if (!response.ok) {
-      setGenerating(false);
-      const text = await response.text();
-      alert(`Generation failed: ${text}`);
-      return;
-    }
-
-    const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
-
-    if (!reader) return;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value);
-      const lines = chunk.split("\n");
-
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.type === "chunk") {
-              setStreamContent((prev) => prev + data.content);
-              // Auto-scroll
-              if (streamRef.current) {
-                streamRef.current.scrollTop = streamRef.current.scrollHeight;
-              }
-            } else if (data.type === "done") {
-              setGenerating(false);
-              apiFetch(`/api/reports/?assessment=${id}`).then(setReports);
-            } else if (data.type === "error") {
-              setGenerating(false);
-              alert(`Generation failed: ${data.message}`);
-            }
-          } catch {}
-        }
-      }
+      setStatusMessage(
+        "Generation started. You’ll be notified when it’s ready."
+      );
+      await refreshReports();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      alert(`Generation failed: ${message}`);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   if (!assessment) return <p className="text-zinc-500">Loading...</p>;
 
   const canGenerate =
-    !generating &&
+    !submitting &&
+    !hasGenerating &&
     evidence.length > 0 &&
     Boolean(selectedTemplateId) &&
     Boolean(selectedVersionId);
@@ -296,7 +286,9 @@ export default function AssessmentDetailPage() {
               disabled={!canGenerate}
               className="text-sm px-3 py-1.5 bg-zinc-100 text-zinc-900 rounded hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {generating ? "Generating..." : "Generate Report"}
+              {submitting || hasGenerating
+                ? "Generating..."
+                : "Generate Report"}
             </button>
           </div>
 
@@ -308,7 +300,7 @@ export default function AssessmentDetailPage() {
               <select
                 value={selectedTemplateId}
                 onChange={(e) => setSelectedTemplateId(e.target.value)}
-                disabled={generating || templates.length === 0}
+                disabled={submitting || hasGenerating || templates.length === 0}
                 className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100 disabled:opacity-50"
               >
                 {templates.length === 0 && (
@@ -334,7 +326,7 @@ export default function AssessmentDetailPage() {
               <select
                 value={selectedVersionId}
                 onChange={(e) => setSelectedVersionId(e.target.value)}
-                disabled={generating || versions.length === 0}
+                disabled={submitting || hasGenerating || versions.length === 0}
                 className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100 disabled:opacity-50"
               >
                 {versions.length === 0 && (
@@ -355,39 +347,42 @@ export default function AssessmentDetailPage() {
             )}
           </div>
 
-          {/* Streaming output — SSE chunk shape unchanged */}
-          {(generating || streamContent) && (
-            <div
-              ref={streamRef}
-              className="mb-4 p-4 bg-zinc-950 rounded border border-zinc-800 max-h-96 overflow-y-auto"
-            >
-              <pre className="text-xs whitespace-pre-wrap font-mono text-zinc-300">
-                {streamContent}
-                {generating && (
-                  <span className="animate-pulse text-zinc-500">▊</span>
-                )}
-              </pre>
+          {statusMessage && (
+            <div className="mb-4 px-3 py-2 rounded border border-sky-800/60 bg-sky-950/40 text-sm text-sky-200">
+              {statusMessage}
             </div>
           )}
 
-          {/* Completed reports */}
           <div className="space-y-2">
-            {reports
-              .filter((r) => r.status === "completed")
-              .map((r) => (
-                <Link
-                  key={r.id}
-                  href={`/reports/${r.id}`}
-                  className="block p-3 rounded border border-zinc-800 bg-zinc-950/50 hover:bg-zinc-800/60"
-                >
+            {reports.length === 0 && (
+              <p className="text-zinc-500 text-sm text-center py-4">
+                No reports yet.
+              </p>
+            )}
+            {reports.map((r) => (
+              <Link
+                key={r.id}
+                href={`/reports/${r.id}`}
+                className="block p-3 rounded border border-zinc-800 bg-zinc-950/50 hover:bg-zinc-800/60"
+              >
+                <div className="flex items-center justify-between gap-2">
                   <div className="text-sm font-medium text-zinc-200">
                     {r.title || "Untitled report"}
                   </div>
-                  <div className="text-xs text-zinc-500">
-                    {new Date(r.created_at).toLocaleDateString()}
-                  </div>
-                </Link>
-              ))}
+                  <span
+                    className={`text-xs capitalize ${reportStatusClass(r.status)}`}
+                  >
+                    {r.status}
+                    {r.status === "generating" && (
+                      <span className="animate-pulse"> …</span>
+                    )}
+                  </span>
+                </div>
+                <div className="text-xs text-zinc-500">
+                  {new Date(r.created_at).toLocaleDateString()}
+                </div>
+              </Link>
+            ))}
           </div>
         </section>
       </div>

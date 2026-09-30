@@ -16,6 +16,7 @@ from openrouter.components import (
 )
 
 from evidence.models import Evidence
+from notifications.services import NotificationEvent, get_notifier
 
 from .models import Report
 
@@ -125,6 +126,15 @@ def run_report_generation(report_id: str) -> None:
         report.status = "completed"
         report.save(update_fields=["content", "status", "updated_at"])
 
+        get_notifier().notify(
+            NotificationEvent(
+                event_type="report.completed",
+                title="Report ready",
+                message=f'"{report.title}" has finished generating.',
+                report_id=str(report.id),
+            )
+        )
+
     except Exception:
         _mark_generation_failed(report)
         raise
@@ -134,6 +144,14 @@ def _mark_generation_failed(report: Report) -> None:
     report.answers.update(status="failed")
     report.status = "failed"
     report.save(update_fields=["status", "updated_at"])
+    get_notifier().notify(
+        NotificationEvent(
+            event_type="report.failed",
+            title="Report generation failed",
+            message=f'"{report.title}" could not be generated. Try again from the assessment.',
+            report_id=str(report.id),
+        )
+    )
 
 
 def _extract_message_content(result) -> str:

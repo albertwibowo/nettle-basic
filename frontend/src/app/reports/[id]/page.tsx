@@ -40,6 +40,8 @@ interface Report {
   updated_at: string;
 }
 
+const POLL_MS = 2000;
+
 function statusClass(status: string) {
   switch (status) {
     case "completed":
@@ -60,6 +62,15 @@ export default function ReportDetailPage() {
   useEffect(() => {
     apiFetch(`/api/reports/${id}/`).then(setReport);
   }, [id]);
+
+  // Poll until the report reaches a terminal status
+  useEffect(() => {
+    if (!report || report.status !== "generating") return;
+    const timer = setInterval(() => {
+      apiFetch(`/api/reports/${id}/`).then(setReport);
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [id, report?.status]);
 
   if (!report) return <p className="text-zinc-500">Loading...</p>;
 
@@ -133,8 +144,11 @@ export default function ReportDetailPage() {
       ) : report.status === "generating" ? (
         <div className="bg-amber-950/40 border border-amber-800/60 rounded-lg p-6 text-center">
           <p className="text-amber-200">
-            This report is currently being generated. Please keep this tab
-            open...
+            This report is currently being generated. You can leave and come
+            back — this page will update automatically when it’s ready.
+          </p>
+          <p className="text-amber-400/70 text-sm mt-2 animate-pulse">
+            Waiting for completion…
           </p>
         </div>
       ) : report.status === "failed" ? (

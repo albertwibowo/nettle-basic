@@ -1,5 +1,6 @@
 import "./globals.css";
 import Link from "next/link";
+import NotificationBell from "@/components/NotificationBell";
 
 export const metadata = {
   title: "Nettle Basic",
@@ -45,6 +46,7 @@ export default function RootLayout({
                 Templates
               </Link>
             </div>
+            <NotificationBell />
           </div>
         </nav>
         <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>
