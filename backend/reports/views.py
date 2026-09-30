@@ -1,18 +1,9 @@
-import json
 from django.db import transaction
 from django.db.models import Count, Q
-from django.http import StreamingHttpResponse
-from django.conf import settings
 from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from openrouter import OpenRouter
-from openrouter.components import (
-    ChatFormatJSONSchemaConfig,
-    ChatJSONSchemaConfig,
-    ProviderPreferences,
-)
 
 from .models import (
     Report,
@@ -29,53 +20,9 @@ from .serializers import (
     ReportTemplateVersionDetailSerializer,
     ReportTemplateVersionCreateSerializer,
 )
+from .tasks import generate_report_task
 from evidence.models import Evidence
-
-# JSON Schema enforced via OpenRouter structured outputs for report generation.
-REPORT_ANSWERS_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "answers": {
-            "type": "array",
-            "description": (
-                "One entry per template question. Include every question_id "
-                "from the prompt exactly once."
-            ),
-            "items": {
-                "type": "object",
-                "properties": {
-                    "question_id": {
-                        "type": "string",
-                        "description": "UUID of the template question being answered.",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": (
-                            "Professional risk-engineering answer. Use an empty "
-                            "string only if the evidence is insufficient."
-                        ),
-                    },
-                },
-                "required": ["question_id", "content"],
-                "additionalProperties": False,
-            },
-        }
-    },
-    "required": ["answers"],
-    "additionalProperties": False,
-}
-
-REPORT_ANSWERS_RESPONSE_FORMAT = ChatFormatJSONSchemaConfig(
-    type="json_schema",
-    json_schema=ChatJSONSchemaConfig(
-        name="report_answers",
-        strict=True,
-        schema_=REPORT_ANSWERS_SCHEMA,
-    ),
-)
-
-# Only route to providers that honor response_format / structured outputs.
-STRUCTURED_OUTPUT_PROVIDER = ProviderPreferences(require_parameters=True)
+from notifications.services import NotificationEvent, get_notifier
 
 
 class ReportTemplateViewSet(viewsets.ModelViewSet):
@@ -192,10 +139,9 @@ class ReportViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def generate(self, request, pk=None):
         """
-        Generate report answers using a single AI call. Resolves and pins a
-        template version, creates answer rows for every question, then streams
-        the model response as SSE. On completion, parses structured JSON into
-        ReportAnswer rows and caches concatenated markdown on report.content.
+        Kick off asynchronous report generation. Resolves and pins a template
+        version, creates answer rows for every question, enqueues a Celery
+        task, and returns 202 with the updated report.
 
         Optional JSON body:
           - template_version: UUID of a specific version to pin
@@ -240,6 +186,14 @@ class ReportViewSet(viewsets.ModelViewSet):
             )
 
         with transaction.atomic():
+            # Lock the row so concurrent generate requests cannot both enqueue.
+            report = Report.objects.select_for_update().get(pk=report.pk)
+            if report.status == "generating":
+                return Response(
+                    {"error": "Report generation is already in progress."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             report.template_version = template_version
             report.status = "generating"
             if not report.title:
@@ -262,71 +216,22 @@ class ReportViewSet(viewsets.ModelViewSet):
             )
             report.answers.update(status="generating")
 
-        evidence_context = _build_evidence_context(evidence_items)
-        prompt = _build_generation_prompt(
-            assessment=assessment,
-            evidence_context=evidence_context,
-            sections=sections,
+        generate_report_task.delay(str(report.id))
+
+        get_notifier().notify(
+            NotificationEvent(
+                event_type="report.generation_started",
+                title="Report generation started",
+                message=f'"{report.title}" is being generated in the background.',
+                report_id=str(report.id),
+            )
         )
 
-        def stream_response():
-            full_content = ""
-
-            try:
-                with OpenRouter(api_key=settings.OPENROUTER_API_KEY) as client:
-                    with client.chat.send(
-                        model="inception/mercury-2.5",
-                        max_tokens=8192,
-                        messages=[{"role": "user", "content": prompt}],
-                        response_format=REPORT_ANSWERS_RESPONSE_FORMAT,
-                        provider=STRUCTURED_OUTPUT_PROVIDER,
-                        stream=True,
-                    ) as stream:
-                        for event in stream:
-                            if not event.choices:
-                                continue
-                            text = event.choices[0].delta.content
-                            if text:
-                                full_content += text
-                                yield f"data: {json.dumps({'type': 'chunk', 'content': text})}\n\n"
-
-                parsed = _parse_answers_json(full_content)
-                answers_by_question_id = {
-                    entry["question_id"]: entry["content"]
-                    for entry in parsed["answers"]
-                }
-
-                answer_rows = list(
-                    report.answers.select_related("question__section").all()
-                )
-                for answer in answer_rows:
-                    qid = str(answer.question_id)
-                    if qid in answers_by_question_id:
-                        answer.content = answers_by_question_id[qid] or ""
-                        answer.status = "completed"
-                    else:
-                        answer.content = ""
-                        answer.status = "failed"
-                    answer.save(update_fields=["content", "status"])
-
-                report.content = _build_markdown_content(sections, answer_rows)
-                report.status = "completed"
-                report.save(update_fields=["content", "status", "updated_at"])
-
-                yield f"data: {json.dumps({'type': 'done', 'report_id': str(report.id)})}\n\n"
-
-            except Exception as e:
-                report.answers.update(status="failed")
-                report.status = "failed"
-                report.save(update_fields=["status", "updated_at"])
-                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-
-        response = StreamingHttpResponse(
-            stream_response(), content_type="text/event-stream"
+        report.refresh_from_db()
+        return Response(
+            ReportSerializer(report).data,
+            status=status.HTTP_202_ACCEPTED,
         )
-        response["Cache-Control"] = "no-cache"
-        response["X-Accel-Buffering"] = "no"
-        return response
 
 
 class TemplateResolutionError(Exception):
@@ -445,119 +350,3 @@ def _resolve_template_version(
         "global default template before generating."
     )
 
-
-def _build_generation_prompt(assessment, evidence_context, sections):
-    """Build a single prompt that asks for JSON answers for every question."""
-    outline_parts = []
-    for section in sections:
-        outline_parts.append(
-            f"## Section: {section.title}\n"
-            f"Instructions: {section.instructions or '(none)'}"
-        )
-        for question in section.questions.all():
-            guidance = question.guidance or "(none)"
-            outline_parts.append(
-                f"- question_id: {question.id}\n"
-                f"  prompt: {question.prompt}\n"
-                f"  guidance: {guidance}"
-            )
-
-    outline = "\n\n".join(outline_parts)
-
-    return f"""You are a risk engineering report writer. Based on the following
-evidence collected during a site inspection, answer every question in the
-report template below.
-
-Client: {assessment.client.name}
-Site: {assessment.site_address or 'Not specified'}
-Assessment: {assessment.title}
-
-Evidence collected:
-{evidence_context}
-
-Report template:
-{outline}
-
-Respond using the enforced JSON schema (answers array of question_id + content).
-
-Rules:
-- Include every question_id from the template exactly once.
-- Write specific, professional answers suitable for insurance underwriters.
-- Reference the evidence where relevant.
-- content must be a string (use empty string only if truly unknown)."""
-
-
-def _parse_answers_json(raw_text):
-    """
-    Parse structured-output JSON into a dict with an `answers` list.
-
-    OpenRouter enforces the schema via response_format; this validates the
-    assembled stream payload before persisting answers.
-    """
-    text = (raw_text or "").strip()
-    if not text:
-        raise ValueError("Model returned an empty response.")
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError("Model response was not valid JSON.") from exc
-
-    if not isinstance(data, dict) or "answers" not in data:
-        raise ValueError("Model JSON must contain an 'answers' array.")
-    if not isinstance(data["answers"], list):
-        raise ValueError("Model JSON 'answers' must be a list.")
-
-    for entry in data["answers"]:
-        if not isinstance(entry, dict):
-            raise ValueError("Each answer must be an object.")
-        if "question_id" not in entry or "content" not in entry:
-            raise ValueError("Each answer must include question_id and content.")
-        if not isinstance(entry["question_id"], str) or not isinstance(
-            entry["content"], str
-        ):
-            raise ValueError("question_id and content must be strings.")
-
-    return data
-
-
-def _build_markdown_content(sections, answer_rows):
-    """Concatenate completed answers into a markdown cache for report.content."""
-    answers_by_question = {row.question_id: row for row in answer_rows}
-    parts = []
-
-    for section in sections:
-        parts.append(f"## {section.title}")
-        for question in section.questions.all():
-            answer = answers_by_question.get(question.id)
-            content = (answer.content if answer else "").strip()
-            parts.append(f"### {question.prompt}")
-            parts.append(content or "_No answer_")
-        parts.append("")
-
-    return "\n\n".join(parts).strip()
-
-
-def _build_evidence_context(evidence_items):
-    """Build a text context from all evidence items for the AI prompt."""
-    context_parts = []
-
-    for item in evidence_items:
-        if item.evidence_type == "note":
-            context_parts.append(f"[Note] {item.title}: {item.text_content}")
-
-        elif item.evidence_type == "document":
-            if item.text_content:
-                context_parts.append(
-                    f"[Document] {item.title}: {item.text_content}"
-                )
-            elif item.file:
-                context_parts.append(
-                    f"[Document] {item.title}: (file uploaded: {item.file.name})"
-                )
-
-        elif item.evidence_type == "image":
-            desc = item.description or item.title or "No description"
-            context_parts.append(f"[Photo] {desc}")
-
-    return "\n".join(context_parts)

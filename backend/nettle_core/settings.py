@@ -20,6 +20,7 @@ INSTALLED_APPS = [
     "assessments",
     "evidence",
     "reports",
+    "notifications",
     "nettle_core",
 ]
 
@@ -77,3 +78,13 @@ MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+
+_NOTIFICATION_CHANNEL = os.environ.get("NOTIFICATION_CHANNEL", "in_app")
+NOTIFICATION_CHANNEL = (
+    _NOTIFICATION_CHANNEL
+    if _NOTIFICATION_CHANNEL in {"in_app", "webhook"}
+    else "in_app"
+)
