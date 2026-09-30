@@ -45,6 +45,12 @@ export default function RootLayout({
               >
                 Templates
               </Link>
+              <Link
+                href="/client-fields"
+                className="text-zinc-400 hover:text-zinc-100"
+              >
+                Client Fields
+              </Link>
             </div>
             <NotificationBell />
           </div>
