@@ -1,18 +1,101 @@
 import json
+from django.db.models import Count
 from django.http import StreamingHttpResponse
 from django.conf import settings
+from django.shortcuts import get_object_or_404
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from openrouter import OpenRouter
 
-from .models import Report
-from .serializers import ReportSerializer, ReportListSerializer
+from .models import Report, ReportTemplate, ReportTemplateVersion
+from .serializers import (
+    ReportSerializer,
+    ReportListSerializer,
+    ReportTemplateSerializer,
+    ReportTemplateListSerializer,
+    ReportTemplateVersionListSerializer,
+    ReportTemplateVersionDetailSerializer,
+    ReportTemplateVersionCreateSerializer,
+)
 from evidence.models import Evidence
 
 
+class ReportTemplateViewSet(viewsets.ModelViewSet):
+    """
+    CRUD for report template metadata.
+
+    Nested versions:
+      GET/POST  /api/report-templates/:id/versions/
+      GET       /api/report-templates/:id/versions/:version_id/
+    """
+
+    queryset = ReportTemplate.objects.all()
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ReportTemplateListSerializer
+        return ReportTemplateSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.action == "list":
+            qs = qs.annotate(annotated_version_count=Count("versions"))
+        client_id = self.request.query_params.get("client")
+        if client_id:
+            qs = qs.filter(client_id=client_id)
+        is_default = self.request.query_params.get("is_default")
+        if is_default is not None:
+            qs = qs.filter(is_default=is_default.lower() in ("1", "true", "yes"))
+        return qs
+
+    @action(detail=True, methods=["get", "post"], url_path="versions")
+    def versions(self, request, pk=None):
+        template = self.get_object()
+
+        if request.method == "GET":
+            versions = template.versions.annotate(
+                annotated_section_count=Count("sections")
+            )
+            serializer = ReportTemplateVersionListSerializer(versions, many=True)
+            return Response(serializer.data)
+
+        serializer = ReportTemplateVersionCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        version = serializer.save(template=template)
+        # Re-fetch with nested sections/questions for the detail response.
+        version = ReportTemplateVersion.objects.prefetch_related(
+            "sections__questions"
+        ).get(pk=version.pk)
+        return Response(
+            ReportTemplateVersionDetailSerializer(version).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path=r"versions/(?P<version_id>[^/.]+)",
+    )
+    def version_detail(self, request, pk=None, version_id=None):
+        template = self.get_object()
+        version = get_object_or_404(
+            ReportTemplateVersion.objects.prefetch_related("sections__questions"),
+            pk=version_id,
+            template=template,
+        )
+        serializer = ReportTemplateVersionDetailSerializer(version)
+        return Response(serializer.data)
+
+
 class ReportViewSet(viewsets.ModelViewSet):
-    queryset = Report.objects.select_related("assessment").all()
+    queryset = Report.objects.select_related(
+        "assessment", "template_version"
+    ).prefetch_related(
+        "answers",
+        "template_version__sections__questions",
+    ).all()
 
     def get_serializer_class(self):
         if self.action == "list":
