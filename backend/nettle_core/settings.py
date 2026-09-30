@@ -20,6 +20,7 @@ INSTALLED_APPS = [
     "assessments",
     "evidence",
     "reports",
+    "notifications",
     "nettle_core",
 ]
 
