@@ -30,7 +30,7 @@ services:
       - media_data:/app/media
     environment:
       DATABASE_URL: postgres://nettle:nettle@db:5432/nettle
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-sk-ant-placeholder}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-sk-or-placeholder}
     depends_on:
       db:
         condition: service_healthy

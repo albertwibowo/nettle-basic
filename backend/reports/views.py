@@ -4,7 +4,7 @@ from django.conf import settings
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-import anthropic
+from openrouter import OpenRouter
 
 from .models import Report
 from .serializers import ReportSerializer, ReportListSerializer
@@ -80,18 +80,23 @@ appropriate for insurance underwriters."""
 
         def stream_response():
             """Stream AI response as Server-Sent Events."""
-            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
             full_content = ""
 
             try:
-                with client.messages.stream(
-                    model="claude-sonnet-5",
-                    max_tokens=4096,
-                    messages=[{"role": "user", "content": prompt}],
-                ) as stream:
-                    for text in stream.text_stream:
-                        full_content += text
-                        yield f"data: {json.dumps({'type': 'chunk', 'content': text})}\n\n"
+                with OpenRouter(api_key=settings.OPENROUTER_API_KEY) as client:
+                    with client.chat.send(
+                        model="inception/mercury-2.5",
+                        max_tokens=4096,
+                        messages=[{"role": "user", "content": prompt}],
+                        stream=True,
+                    ) as stream:
+                        for event in stream:
+                            if not event.choices:
+                                continue
+                            text = event.choices[0].delta.content
+                            if text:
+                                full_content += text
+                                yield f"data: {json.dumps({'type': 'chunk', 'content': text})}\n\n"
 
                 # Save completed report
                 report.content = full_content
