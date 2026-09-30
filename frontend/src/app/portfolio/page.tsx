@@ -25,23 +25,23 @@ export default function PortfolioPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <p className="text-gray-500">Loading...</p>;
+  if (loading) return <p className="text-zinc-500">Loading...</p>;
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Portfolio</h1>
+        <h1 className="text-2xl font-bold text-zinc-100">Portfolio</h1>
         <Link
           href="/portfolio/new"
-          className="bg-gray-900 text-white px-4 py-2 rounded text-sm hover:bg-gray-700"
+          className="bg-zinc-100 text-zinc-900 px-4 py-2 rounded text-sm hover:bg-white"
         >
           Add Client
         </Link>
       </div>
-      <div className="bg-white rounded-lg border border-gray-200">
+      <div className="bg-zinc-900/60 rounded-lg border border-zinc-800">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-gray-200 text-left text-gray-500">
+            <tr className="border-b border-zinc-800 text-left text-zinc-500">
               <th className="px-4 py-3 font-medium">Name</th>
               <th className="px-4 py-3 font-medium">Industry</th>
               <th className="px-4 py-3 font-medium">Location</th>
@@ -52,29 +52,30 @@ export default function PortfolioPage() {
             {clients.map((client) => (
               <tr
                 key={client.id}
-                className="border-b border-gray-100 hover:bg-gray-50"
+                className="border-b border-zinc-800/80 hover:bg-zinc-800/40"
               >
                 <td className="px-4 py-3">
                   <Link
                     href={`/portfolio/${client.id}`}
-                    className="text-blue-600 hover:underline"
+                    className="text-sky-400 hover:underline"
                   >
                     {client.name}
                   </Link>
                 </td>
-                <td className="px-4 py-3 text-gray-600">{client.industry}</td>
-                <td className="px-4 py-3 text-gray-600">
+                <td className="px-4 py-3 text-zinc-400">{client.industry}</td>
+                <td className="px-4 py-3 text-zinc-400">
                   {client.city}, {client.country}
                 </td>
                 <td className="px-4 py-3">
                   {client.risk_rating && (
                     <span
                       className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
-                        client.risk_rating === "high" || client.risk_rating === "critical"
-                          ? "bg-red-100 text-red-700"
+                        client.risk_rating === "high" ||
+                        client.risk_rating === "critical"
+                          ? "bg-red-950 text-red-400"
                           : client.risk_rating === "medium"
-                          ? "bg-yellow-100 text-yellow-700"
-                          : "bg-green-100 text-green-700"
+                          ? "bg-amber-950 text-amber-400"
+                          : "bg-emerald-950 text-emerald-400"
                       }`}
                     >
                       {client.risk_rating}
@@ -86,7 +87,7 @@ export default function PortfolioPage() {
           </tbody>
         </table>
         {clients.length === 0 && (
-          <p className="text-gray-400 text-center py-8">No clients yet.</p>
+          <p className="text-zinc-500 text-center py-8">No clients yet.</p>
         )}
       </div>
     </div>
