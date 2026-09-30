@@ -249,6 +249,30 @@ class ReportSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "assessment_title", "sections", "created_at", "updated_at"]
 
+    def validate(self, attrs):
+        assessment = attrs.get("assessment") or getattr(self.instance, "assessment", None)
+        template_version = attrs.get("template_version")
+        if template_version is None and "template_version" not in attrs:
+            template_version = getattr(self.instance, "template_version", None)
+
+        if assessment is not None and template_version is not None:
+            template = template_version.template
+            same_portfolio = (
+                template.client_id is not None
+                and template.client_id == assessment.client_id
+            )
+            is_global_default = template.client_id is None and template.is_default
+            if not same_portfolio and not is_global_default:
+                raise serializers.ValidationError(
+                    {
+                        "template_version": (
+                            "Template must belong to the same portfolio as "
+                            "the assessment, or be the global default."
+                        )
+                    }
+                )
+        return attrs
+
     def get_sections(self, report):
         """Return answers grouped by section from the pinned template version."""
         if not report.template_version_id:

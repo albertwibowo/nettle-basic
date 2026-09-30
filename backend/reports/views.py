@@ -52,7 +52,7 @@ class ReportTemplateViewSet(viewsets.ModelViewSet):
         client_id = self.request.query_params.get("client")
         if client_id:
             qs = qs.filter(client_id=client_id)
-        # Templates usable for an assessment: that portfolio's templates + global default.
+        # Templates usable when generating: same portfolio + global default.
         for_client = self.request.query_params.get("for_client")
         if for_client:
             qs = qs.filter(
@@ -291,6 +291,27 @@ def _latest_version_for_template(template):
     )
 
 
+def _template_allowed_for_assessment(template, client):
+    """
+    True when the template may be used for this assessment:
+    linked to the same portfolio, or the global default.
+    """
+    if template.client_id is not None:
+        return template.client_id == client.id
+    return template.is_default
+
+
+def _assert_version_allowed_for_assessment(version, client):
+    """Raise if the version's template is not allowed for this assessment."""
+    template = version.template
+    if not _template_allowed_for_assessment(template, client):
+        raise TemplateResolutionError(
+            "Selected template must belong to this assessment's portfolio "
+            "or be the global default."
+        )
+    return version
+
+
 def _resolve_template_version(
     report,
     assessment,
@@ -300,23 +321,29 @@ def _resolve_template_version(
     """
     Return the template version to use for generation.
 
+    Selected templates/versions must belong to the assessment's portfolio
+    or be the global default (other portfolios are rejected).
+
     Resolution order:
       1. Explicit template_version_id from the request
       2. Latest version of an explicit template_id from the request
       3. Already-pinned report.template_version
-      4. Latest version of a client-specific template
+      4. Latest version of a portfolio-specific template
       5. Latest version of the global default template
       6. Raise TemplateResolutionError
     """
+    client = assessment.client
+
     if template_version_id:
         try:
-            return ReportTemplateVersion.objects.prefetch_related(
-                "sections__questions"
-            ).get(pk=template_version_id)
+            version = ReportTemplateVersion.objects.select_related(
+                "template"
+            ).prefetch_related("sections__questions").get(pk=template_version_id)
         except ReportTemplateVersion.DoesNotExist as exc:
             raise TemplateResolutionError(
                 "Selected template version was not found."
             ) from exc
+        return _assert_version_allowed_for_assessment(version, client)
 
     if template_id:
         try:
@@ -325,6 +352,11 @@ def _resolve_template_version(
             raise TemplateResolutionError(
                 "Selected template was not found."
             ) from exc
+        if not _template_allowed_for_assessment(template, client):
+            raise TemplateResolutionError(
+                "Selected template must belong to this assessment's portfolio "
+                "or be the global default."
+            )
         version = _latest_version_for_template(template)
         if version:
             return version
@@ -333,12 +365,13 @@ def _resolve_template_version(
         )
 
     if report.template_version_id:
-        return ReportTemplateVersion.objects.prefetch_related(
-            "sections__questions"
-        ).get(pk=report.template_version_id)
+        version = ReportTemplateVersion.objects.select_related(
+            "template"
+        ).prefetch_related("sections__questions").get(pk=report.template_version_id)
+        return _assert_version_allowed_for_assessment(version, client)
 
     client_template = (
-        ReportTemplate.objects.filter(client=assessment.client)
+        ReportTemplate.objects.filter(client=client)
         .order_by("-updated_at", "-created_at")
         .first()
     )
@@ -357,7 +390,7 @@ def _resolve_template_version(
             return default_version
 
     raise TemplateResolutionError(
-        "No template version available. Create a client template or a "
+        "No template version available. Create a portfolio template or a "
         "global default template before generating."
     )
 

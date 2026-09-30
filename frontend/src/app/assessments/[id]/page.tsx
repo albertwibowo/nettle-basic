@@ -68,7 +68,7 @@ export default function AssessmentDetailPage() {
       apiFetch(`/api/report-templates/?for_client=${data.client}`).then(
         (tpls: TemplateOption[]) => {
           setTemplates(tpls);
-          // Prefer a client-specific template with versions, else the default.
+          // Prefer a portfolio template with versions, else the global default.
           const preferred =
             tpls.find((t) => t.client && (t.version_count ?? 0) > 0) ||
             tpls.find((t) => t.is_default && (t.version_count ?? 0) > 0) ||
@@ -349,8 +349,8 @@ export default function AssessmentDetailPage() {
             </div>
             {templates.length === 0 && (
               <p className="text-xs text-zinc-500">
-                Create a template for this portfolio (or seed the global default)
-                before generating.
+                No templates available. Create one for {assessment.client_name}{" "}
+                or seed the global default.
               </p>
             )}
           </div>
