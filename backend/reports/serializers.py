@@ -18,6 +18,10 @@ from .models import (
 
 
 class ReportTemplateSerializer(serializers.ModelSerializer):
+    client_name = serializers.CharField(
+        source="client.name", read_only=True, default=None
+    )
+
     class Meta:
         model = ReportTemplate
         fields = [
@@ -25,15 +29,31 @@ class ReportTemplateSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "client",
+            "client_name",
             "is_default",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at"]
+        read_only_fields = ["id", "client_name", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        # Portfolio templates are never the global default.
+        client = attrs.get("client", getattr(self.instance, "client", None))
+        is_default = attrs.get(
+            "is_default", getattr(self.instance, "is_default", False)
+        )
+        if client is not None and is_default:
+            raise serializers.ValidationError(
+                {"is_default": "Only the global template may be marked as default."}
+            )
+        return attrs
 
 
 class ReportTemplateListSerializer(serializers.ModelSerializer):
     version_count = serializers.SerializerMethodField()
+    client_name = serializers.CharField(
+        source="client.name", read_only=True, default=None
+    )
 
     class Meta:
         model = ReportTemplate
@@ -42,6 +62,7 @@ class ReportTemplateListSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "client",
+            "client_name",
             "is_default",
             "version_count",
             "created_at",

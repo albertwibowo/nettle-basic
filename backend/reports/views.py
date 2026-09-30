@@ -33,11 +33,11 @@ class ReportTemplateViewSet(viewsets.ModelViewSet):
     CRUD for report template metadata.
 
     Nested versions:
-      GET/POST  /api/report-templates/:id/versions/
-      GET       /api/report-templates/:id/versions/:version_id/
+      GET/POST    /api/report-templates/:id/versions/
+      GET/DELETE  /api/report-templates/:id/versions/:version_id/
     """
 
-    queryset = ReportTemplate.objects.all()
+    queryset = ReportTemplate.objects.select_related("client").all()
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_serializer_class(self):
@@ -56,6 +56,18 @@ class ReportTemplateViewSet(viewsets.ModelViewSet):
         if is_default is not None:
             qs = qs.filter(is_default=is_default.lower() in ("1", "true", "yes"))
         return qs
+
+    def destroy(self, request, *args, **kwargs):
+        template = self.get_object()
+        if template.is_default and template.client_id is None:
+            return Response(
+                {
+                    "error": "The global default template cannot be deleted. "
+                    "Create and manage portfolio-specific templates instead."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
 
     @action(detail=True, methods=["get", "post"], url_path="versions")
     def versions(self, request, pk=None):
@@ -82,7 +94,7 @@ class ReportTemplateViewSet(viewsets.ModelViewSet):
 
     @action(
         detail=True,
-        methods=["get"],
+        methods=["get", "delete"],
         url_path=r"versions/(?P<version_id>[^/.]+)",
     )
     def version_detail(self, request, pk=None, version_id=None):
@@ -92,6 +104,11 @@ class ReportTemplateViewSet(viewsets.ModelViewSet):
             pk=version_id,
             template=template,
         )
+
+        if request.method == "DELETE":
+            version.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
         serializer = ReportTemplateVersionDetailSerializer(version)
         return Response(serializer.data)
 

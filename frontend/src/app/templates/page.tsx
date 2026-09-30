@@ -1,13 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { apiFetch, apiPost } from "@/lib/api";
+import { apiDelete, apiFetch, apiPost } from "@/lib/api";
+
+interface Client {
+  id: string;
+  name: string;
+}
 
 interface Template {
   id: string;
   name: string;
   description: string;
   client: string | null;
+  client_name: string | null;
   is_default: boolean;
   version_count?: number;
   created_at: string;
@@ -55,12 +61,17 @@ function emptySection(order: number): Section {
 
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [versionDetail, setVersionDetail] = useState<VersionDetail | null>(
     null
   );
-  const [creating, setCreating] = useState(false);
+  const [creatingVersion, setCreatingVersion] = useState(false);
+  const [creatingTemplate, setCreatingTemplate] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
+  const [draftClientId, setDraftClientId] = useState("");
   const [draftSections, setDraftSections] = useState<Section[]>([
     emptySection(1),
   ]);
@@ -79,6 +90,7 @@ export default function TemplatesPage() {
     loadTemplates().then((data) => {
       setSelectedId((current) => current ?? (data[0]?.id ?? null));
     });
+    apiFetch("/api/portfolio/clients/").then(setClients);
   }, [loadTemplates]);
 
   useEffect(() => {
@@ -88,7 +100,8 @@ export default function TemplatesPage() {
       return;
     }
     setError(null);
-    setCreating(false);
+    setCreatingVersion(false);
+    setCreatingTemplate(false);
     setVersionDetail(null);
     apiFetch(`/api/report-templates/${selectedId}/versions/`).then(
       (data: VersionSummary[]) => {
@@ -107,6 +120,7 @@ export default function TemplatesPage() {
   };
 
   const selected = templates.find((t) => t.id === selectedId) || null;
+  const canDeleteTemplate = Boolean(selected?.client);
 
   const updateSection = (index: number, patch: Partial<Section>) => {
     setDraftSections((prev) =>
@@ -130,6 +144,105 @@ export default function TemplatesPage() {
         };
       })
     );
+  };
+
+  const resetTemplateDraft = () => {
+    setDraftName("");
+    setDraftDescription("");
+    setDraftClientId(clients[0]?.id ?? "");
+  };
+
+  const handleCreateTemplate = async () => {
+    setError(null);
+    if (!draftName.trim()) {
+      setError("Template name is required.");
+      return;
+    }
+    if (!draftClientId) {
+      setError("Select a portfolio company for this template.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const created: Template = await apiPost("/api/report-templates/", {
+        name: draftName.trim(),
+        description: draftDescription.trim(),
+        client: draftClientId,
+        is_default: false,
+      });
+      const refreshed = await loadTemplates();
+      setCreatingTemplate(false);
+      resetTemplateDraft();
+      setSelectedId(created.id);
+      // Prefer the freshly created row if list is briefly stale.
+      if (!refreshed.find((t) => t.id === created.id)) {
+        setTemplates((prev) => [...prev, created]);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create template");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteTemplate = async () => {
+    if (!selected || !canDeleteTemplate) return;
+    if (
+      !confirm(
+        `Delete template "${selected.name}" and all of its versions? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    setError(null);
+    setSaving(true);
+    try {
+      await apiDelete(`/api/report-templates/${selected.id}/`);
+      const remaining = await loadTemplates();
+      setSelectedId(remaining[0]?.id ?? null);
+      setVersions([]);
+      setVersionDetail(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete template");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteVersion = async (version: VersionSummary) => {
+    if (!selectedId) return;
+    if (
+      !confirm(
+        `Delete version v${version.version_number}? Reports pinned to it will lose their template pin.`
+      )
+    ) {
+      return;
+    }
+
+    setError(null);
+    setSaving(true);
+    try {
+      await apiDelete(
+        `/api/report-templates/${selectedId}/versions/${version.id}/`
+      );
+      const refreshed: VersionSummary[] = await apiFetch(
+        `/api/report-templates/${selectedId}/versions/`
+      );
+      setVersions(refreshed);
+      setCreatingVersion(false);
+      if (refreshed.length > 0) {
+        loadVersionDetail(selectedId, refreshed[0].id);
+      } else {
+        setVersionDetail(null);
+      }
+      loadTemplates();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete version");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleCreateVersion = async () => {
@@ -167,7 +280,7 @@ export default function TemplatesPage() {
         `/api/report-templates/${selectedId}/versions/`,
         payload
       );
-      setCreating(false);
+      setCreatingVersion(false);
       setDraftSections([emptySection(1)]);
       const refreshed: VersionSummary[] = await apiFetch(
         `/api/report-templates/${selectedId}/versions/`
@@ -189,30 +302,51 @@ export default function TemplatesPage() {
       <h1 className="text-2xl font-bold mb-2 text-zinc-100">Report Templates</h1>
       <p className="text-sm text-zinc-500 mb-6">
         Templates are versioned. Structure is immutable after create — submit a
-        new version to change sections or questions.
+        new version to change sections or questions. Portfolio companies may
+        have many templates.
       </p>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Template list */}
         <aside className="border border-zinc-800 rounded-lg bg-zinc-900/60 p-4">
-          <h2 className="text-sm font-semibold text-zinc-300 mb-3">
-            Templates
-          </h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-zinc-300">Templates</h2>
+            <button
+              type="button"
+              onClick={() => {
+                setCreatingTemplate(true);
+                setCreatingVersion(false);
+                setVersionDetail(null);
+                setSelectedId(null);
+                resetTemplateDraft();
+                setError(null);
+              }}
+              className="text-xs px-2.5 py-1 bg-zinc-100 text-zinc-900 rounded hover:bg-white"
+            >
+              New template
+            </button>
+          </div>
           <ul className="space-y-1">
             {templates.map((t) => (
               <li key={t.id}>
                 <button
                   type="button"
-                  onClick={() => setSelectedId(t.id)}
+                  onClick={() => {
+                    setCreatingTemplate(false);
+                    setSelectedId(t.id);
+                  }}
                   className={`w-full text-left px-3 py-2 rounded text-sm ${
-                    selectedId === t.id
+                    !creatingTemplate && selectedId === t.id
                       ? "bg-zinc-800 text-zinc-100"
                       : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
                   }`}
                 >
                   <div className="font-medium">{t.name}</div>
                   <div className="text-xs text-zinc-500 mt-0.5">
-                    {t.is_default ? "Default · " : ""}
+                    {t.is_default
+                      ? "Default"
+                      : t.client_name || "Unassigned"}
+                    {" · "}
                     {t.version_count ?? 0} version
                     {(t.version_count ?? 0) === 1 ? "" : "s"}
                   </div>
@@ -221,7 +355,7 @@ export default function TemplatesPage() {
             ))}
             {templates.length === 0 && (
               <li className="text-zinc-500 text-sm px-3 py-4">
-                No templates yet. Run seed_data to create the default.
+                No templates yet. Create one for a portfolio company.
               </li>
             )}
           </ul>
@@ -229,7 +363,92 @@ export default function TemplatesPage() {
 
         {/* Detail / versions */}
         <div className="lg:col-span-2 space-y-4">
-          {selected ? (
+          {error && (
+            <div className="border border-red-800/60 bg-red-950/40 rounded-lg px-4 py-3 text-sm text-red-300">
+              {error}
+            </div>
+          )}
+
+          {creatingTemplate ? (
+            <div className="border border-zinc-800 rounded-lg bg-zinc-900/60 p-5 space-y-4">
+              <h2 className="text-lg font-semibold text-zinc-100">
+                New portfolio template
+              </h2>
+              <p className="text-sm text-zinc-500">
+                Attach this template to an existing portfolio company. You can
+                add versions after it is created.
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">
+                    Portfolio company
+                  </label>
+                  <select
+                    value={draftClientId}
+                    onChange={(e) => setDraftClientId(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100"
+                  >
+                    <option value="">Select a company...</option>
+                    {clients.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">
+                    Name
+                  </label>
+                  <input
+                    type="text"
+                    value={draftName}
+                    onChange={(e) => setDraftName(e.target.value)}
+                    placeholder="e.g. Manufacturing risk template"
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-zinc-500 mb-1">
+                    Description
+                  </label>
+                  <textarea
+                    value={draftDescription}
+                    onChange={(e) => setDraftDescription(e.target.value)}
+                    rows={3}
+                    placeholder="Optional notes about when to use this template"
+                    className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={handleCreateTemplate}
+                  disabled={saving || clients.length === 0}
+                  className="text-sm px-3 py-1.5 bg-zinc-100 text-zinc-900 rounded hover:bg-white disabled:opacity-50"
+                >
+                  {saving ? "Saving..." : "Create template"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreatingTemplate(false);
+                    setError(null);
+                    setSelectedId(templates[0]?.id ?? null);
+                  }}
+                  className="text-sm px-3 py-1.5 text-zinc-500 hover:text-zinc-300"
+                >
+                  Cancel
+                </button>
+              </div>
+              {clients.length === 0 && (
+                <p className="text-sm text-zinc-500">
+                  Add a portfolio company before creating a template.
+                </p>
+              )}
+            </div>
+          ) : selected ? (
             <>
               <div className="border border-zinc-800 rounded-lg bg-zinc-900/60 p-5">
                 <div className="flex items-start justify-between gap-4">
@@ -242,52 +461,75 @@ export default function TemplatesPage() {
                         {selected.description}
                       </p>
                     )}
+                    <p className="text-xs text-zinc-500 mt-2">
+                      {selected.is_default
+                        ? "Global default"
+                        : selected.client_name
+                          ? `Portfolio: ${selected.client_name}`
+                          : "No portfolio assigned"}
+                    </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCreating(true);
-                      setVersionDetail(null);
-                      setDraftSections([emptySection(1)]);
-                      setError(null);
-                    }}
-                    className="shrink-0 text-sm px-3 py-1.5 bg-zinc-100 text-zinc-900 rounded hover:bg-white"
-                  >
-                    New version
-                  </button>
+                  <div className="flex shrink-0 gap-2">
+                    {canDeleteTemplate && (
+                      <button
+                        type="button"
+                        onClick={handleDeleteTemplate}
+                        disabled={saving}
+                        className="text-sm px-3 py-1.5 border border-red-900/60 text-red-400 rounded hover:border-red-700 hover:text-red-300 disabled:opacity-50"
+                      >
+                        Delete template
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCreatingVersion(true);
+                        setVersionDetail(null);
+                        setDraftSections([emptySection(1)]);
+                        setError(null);
+                      }}
+                      className="text-sm px-3 py-1.5 bg-zinc-100 text-zinc-900 rounded hover:bg-white"
+                    >
+                      New version
+                    </button>
+                  </div>
                 </div>
 
                 <div className="mt-4 flex flex-wrap gap-2">
                   {versions.map((v) => (
-                    <button
-                      key={v.id}
-                      type="button"
-                      onClick={() => {
-                        setCreating(false);
-                        loadVersionDetail(selected.id, v.id);
-                      }}
-                      className={`text-xs px-2.5 py-1 rounded border ${
-                        !creating && versionDetail?.id === v.id
-                          ? "border-zinc-500 bg-zinc-800 text-zinc-100"
-                          : "border-zinc-700 text-zinc-400 hover:border-zinc-500"
-                      }`}
-                    >
-                      v{v.version_number} · {v.section_count} sections
-                    </button>
+                    <div key={v.id} className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCreatingVersion(false);
+                          loadVersionDetail(selected.id, v.id);
+                        }}
+                        className={`text-xs px-2.5 py-1 rounded border ${
+                          !creatingVersion && versionDetail?.id === v.id
+                            ? "border-zinc-500 bg-zinc-800 text-zinc-100"
+                            : "border-zinc-700 text-zinc-400 hover:border-zinc-500"
+                        }`}
+                      >
+                        v{v.version_number} · {v.section_count} sections
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteVersion(v)}
+                        disabled={saving}
+                        title={`Delete v${v.version_number}`}
+                        className="text-xs px-1.5 py-1 text-zinc-600 hover:text-red-400 disabled:opacity-50"
+                      >
+                        ×
+                      </button>
+                    </div>
                   ))}
-                  {versions.length === 0 && !creating && (
+                  {versions.length === 0 && !creatingVersion && (
                     <p className="text-sm text-zinc-500">No versions yet.</p>
                   )}
                 </div>
               </div>
 
-              {error && (
-                <div className="border border-red-800/60 bg-red-950/40 rounded-lg px-4 py-3 text-sm text-red-300">
-                  {error}
-                </div>
-              )}
-
-              {creating ? (
+              {creatingVersion ? (
                 <div className="border border-zinc-800 rounded-lg bg-zinc-900/60 p-5 space-y-6">
                   <h3 className="font-semibold text-zinc-100">
                     Create new version
@@ -427,7 +669,7 @@ export default function TemplatesPage() {
                     <button
                       type="button"
                       onClick={() => {
-                        setCreating(false);
+                        setCreatingVersion(false);
                         setError(null);
                       }}
                       className="text-sm px-3 py-1.5 text-zinc-500 hover:text-zinc-300"
@@ -438,9 +680,27 @@ export default function TemplatesPage() {
                 </div>
               ) : versionDetail ? (
                 <div className="border border-zinc-800 rounded-lg bg-zinc-900/60 p-5 space-y-5">
-                  <h3 className="font-semibold text-zinc-100">
-                    Version {versionDetail.version_number}
-                  </h3>
+                  <div className="flex items-center justify-between gap-4">
+                    <h3 className="font-semibold text-zinc-100">
+                      Version {versionDetail.version_number}
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleDeleteVersion({
+                          id: versionDetail.id,
+                          template: versionDetail.template,
+                          version_number: versionDetail.version_number,
+                          section_count: versionDetail.sections.length,
+                          created_at: versionDetail.created_at,
+                        })
+                      }
+                      disabled={saving}
+                      className="text-sm text-red-400 hover:text-red-300 disabled:opacity-50"
+                    >
+                      Delete version
+                    </button>
+                  </div>
                   {versionDetail.sections.map((section) => (
                     <div key={section.id}>
                       <h4 className="text-sm font-medium text-zinc-200">

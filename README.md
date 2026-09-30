@@ -51,10 +51,10 @@ Template resolution on generate (if no version is pinned):
 | `/api/reports/` | GET, POST | List/create reports (optional `template_version` on create) |
 | `/api/reports/:id/` | GET | Report detail with answers grouped by section |
 | `/api/reports/:id/generate/` | POST | Generate report (SSE stream; one LLM call) |
-| `/api/report-templates/` | GET, POST | List/create templates |
-| `/api/report-templates/:id/` | GET, PATCH, DELETE | Template metadata |
+| `/api/report-templates/` | GET, POST | List/create templates (`?client=` filters by portfolio) |
+| `/api/report-templates/:id/` | GET, PATCH, DELETE | Template metadata (global default cannot be deleted) |
 | `/api/report-templates/:id/versions/` | GET, POST | List versions; create version with nested sections/questions |
-| `/api/report-templates/:id/versions/:version_id/` | GET | Version detail with nested structure |
+| `/api/report-templates/:id/versions/:version_id/` | GET, DELETE | Version detail; delete a version |
 
 ### Version create payload
 
@@ -77,4 +77,4 @@ Template resolution on generate (if no version is pinned):
 }
 ```
 
-`version_number` is assigned automatically. Versions are append-only — there is no PATCH for nested structure.
+`version_number` is assigned automatically. Versions are immutable — there is no PATCH for nested structure. Delete a version (or create a new one) to change structure. Portfolio companies may own many templates; create with `{ "name", "description", "client" }`.
