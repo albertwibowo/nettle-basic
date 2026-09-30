@@ -13,8 +13,6 @@ The basic principle is to allow end users to create their own templates. For eac
 - Use OpenRouter instead of Anthropic 
   - To avoid vendor lock-in
 
-
-
 #### If time allowed:
 
 - Batching the LLM call
@@ -24,31 +22,41 @@ The basic principle is to allow end users to create their own templates. For eac
 - Add retries
   - What if the LLMs fail to generate? It will stop the whole process.
 - Allow LLMs to keep generating if some sections fail
-- Caching 
+- Caching
 
 
+
+## Challenge 2
+
+The same principle as solution to challenge 1. We give users the ability to define their own client fields. The only difference is, we maintain a set of default fields e.g. id, portfolio name, or anything that is consistent across portfolios. 
+
+#### Implemented:
+
+- Allow users to add / remove new client fields
+  - The field also support dynamic choices
+
+#### If time allowed:
+
+- Implement client fields on the portfolios level + add versioning 
+  - Maybe it's possible for a portfolio to use different client fields, etc 
 
 ## Challenge 3
 
 The principle is to use background task like Redis + Celery since we are using Django. Once users click on 'generate report', we will display notification in the UI to show them that the task has been received. Users then can navigate and do something else before being notified again that it's one. 
 
-
-
 #### Implemented:
 
 - simple Redis + Celery combo for background tasks 
-- Simple in app notification 
+- Simple in app notification
 
 #### If time allowed:
 
 - Allow users to choose how they want to be notified e.g. Whatsapp, Text messages, Emails, browser based, etc 
-  - Needs to consider fan-out e.g. what happens if users opt for both whatsapp and emails? 
+  - Needs to consider fan-out e.g. what happens if users opt for both whatsapp and emails?
 - Idempotency 
   - Only mark failed if retries are exhausted 
-  - Before retrying expensive task e.g. LLM generation, check if it's completed. If it is completed, just return w/ retyring LLM generation 
+  - Before retrying expensive task e.g. LLM generation, check if it's completed. If it is completed, just return w/ retyring LLM generation
 - Tenant aware notification 
 - Consider using "real production broker" e.g. RabbitMQ instead of Redis
   - Keep Redis as a cache engine
-
-
 
