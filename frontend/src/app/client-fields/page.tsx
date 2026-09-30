@@ -5,10 +5,16 @@ import { apiDelete, apiFetch, apiPatch, apiPost } from "@/lib/api";
 import {
   ClientFieldDefinition,
   FIELD_TYPES,
+  FieldChoice,
   FieldType,
   groupDefinitions,
   groupLabel,
 } from "@/lib/clientFields";
+
+interface ChoiceOption {
+  value: string;
+  label: string;
+}
 
 interface DraftField {
   key: string;
@@ -19,7 +25,11 @@ interface DraftField {
   enabled: boolean;
   order: number;
   help_text: string;
-  choicesText: string;
+  choices: ChoiceOption[];
+}
+
+function emptyChoice(): ChoiceOption {
+  return { value: "", label: "" };
 }
 
 function emptyDraft(order: number): DraftField {
@@ -32,27 +42,118 @@ function emptyDraft(order: number): DraftField {
     enabled: true,
     order,
     help_text: "",
-    choicesText: "",
+    choices: [emptyChoice()],
   };
 }
 
-function parseChoices(text: string): { value: string; label: string }[] | null {
-  const lines = text
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
-  if (lines.length === 0) return null;
-  return lines.map((line) => {
-    const sep = line.indexOf("|");
-    if (sep === -1) {
-      const value = line.toLowerCase().replace(/\s+/g, "_");
-      return { value, label: line };
+function slugifyValue(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_-]/g, "");
+}
+
+function normalizeChoices(
+  choices: ClientFieldDefinition["choices"]
+): ChoiceOption[] {
+  if (!choices || choices.length === 0) return [emptyChoice()];
+  return choices.map((item) => {
+    if (typeof item === "object" && item !== null && "value" in item) {
+      const choice = item as FieldChoice;
+      return {
+        value: String(choice.value),
+        label: choice.label ?? String(choice.value),
+      };
     }
-    return {
-      value: line.slice(0, sep).trim(),
-      label: line.slice(sep + 1).trim() || line.slice(0, sep).trim(),
-    };
+    return { value: String(item), label: String(item) };
   });
+}
+
+/** Drop blank rows; fill missing value from label (or vice versa). */
+function finalizeChoices(
+  choices: ChoiceOption[]
+): { value: string; label: string }[] | null {
+  const cleaned = choices
+    .map((c) => {
+      const label = c.label.trim();
+      const value = c.value.trim() || slugifyValue(label);
+      return {
+        value,
+        label: label || value,
+      };
+    })
+    .filter((c) => c.value);
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function ChoicesEditor({
+  choices,
+  onChange,
+}: {
+  choices: ChoiceOption[];
+  onChange: (choices: ChoiceOption[]) => void;
+}) {
+  const updateAt = (index: number, patch: Partial<ChoiceOption>) => {
+    onChange(choices.map((c, i) => (i === index ? { ...c, ...patch } : c)));
+  };
+
+  const removeAt = (index: number) => {
+    if (choices.length <= 1) {
+      onChange([emptyChoice()]);
+      return;
+    }
+    onChange(choices.filter((_, i) => i !== index));
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <label className="block text-xs text-zinc-500">Choices</label>
+        <button
+          type="button"
+          onClick={() => onChange([...choices, emptyChoice()])}
+          className="text-xs px-2.5 py-1 rounded border border-zinc-700 text-zinc-300 hover:border-zinc-500"
+        >
+          Add option
+        </button>
+      </div>
+      <ul className="space-y-2">
+        {choices.map((choice, index) => (
+          <li key={index} className="flex items-start gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 flex-1 min-w-0">
+              <input
+                type="text"
+                value={choice.value}
+                onChange={(e) => updateAt(index, { value: e.target.value })}
+                placeholder="value (e.g. low)"
+                className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600"
+              />
+              <input
+                type="text"
+                value={choice.label}
+                onChange={(e) => updateAt(index, { label: e.target.value })}
+                placeholder="Label (e.g. Low)"
+                className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => removeAt(index)}
+              className="shrink-0 text-xs px-2.5 py-2 text-zinc-600 hover:text-red-400"
+              aria-label={`Remove option ${index + 1}`}
+            >
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
+      <p className="text-[11px] text-zinc-600">
+        Value is stored on the client; label is shown in forms. Leave value
+        blank to derive it from the label.
+      </p>
+    </div>
+  );
 }
 
 export default function ClientFieldsPage() {
@@ -67,6 +168,8 @@ export default function ClientFieldsPage() {
     enabled: boolean;
     order: number;
     help_text: string;
+    field_type: FieldType;
+    choices: ChoiceOption[];
   } | null>(null);
   const [creating, setCreating] = useState(false);
   const [createDraft, setCreateDraft] = useState<DraftField>(emptyDraft(1));
@@ -101,6 +204,8 @@ export default function ClientFieldsPage() {
       enabled: def.enabled,
       order: def.order,
       help_text: def.help_text || "",
+      field_type: def.field_type,
+      choices: normalizeChoices(def.choices),
     });
     setError(null);
   };
@@ -117,18 +222,29 @@ export default function ClientFieldsPage() {
       return;
     }
 
+    const payload: Record<string, unknown> = {
+      label: editDraft.label.trim(),
+      required: editDraft.required,
+      enabled: editDraft.enabled,
+      order: editDraft.order,
+      help_text: editDraft.help_text.trim(),
+    };
+
+    if (editDraft.field_type === "choice") {
+      const choices = finalizeChoices(editDraft.choices);
+      if (!choices) {
+        setError("Choice fields need at least one option.");
+        return;
+      }
+      payload.choices = choices;
+    }
+
     setSaving(true);
     setError(null);
     try {
       const updated: ClientFieldDefinition = await apiPatch(
         `/api/portfolio/client-fields/${editingId}/`,
-        {
-          label: editDraft.label.trim(),
-          required: editDraft.required,
-          enabled: editDraft.enabled,
-          order: editDraft.order,
-          help_text: editDraft.help_text.trim(),
-        }
+        payload
       );
       setDefinitions((prev) =>
         prev
@@ -184,9 +300,9 @@ export default function ClientFieldsPage() {
       return;
     }
     if (createDraft.field_type === "choice") {
-      const choices = parseChoices(createDraft.choicesText);
+      const choices = finalizeChoices(createDraft.choices);
       if (!choices) {
-        setError("Choice fields need at least one option (one per line).");
+        setError("Choice fields need at least one option.");
         return;
       }
     }
@@ -204,7 +320,7 @@ export default function ClientFieldsPage() {
         help_text: createDraft.help_text.trim(),
       };
       if (createDraft.field_type === "choice") {
-        payload.choices = parseChoices(createDraft.choicesText);
+        payload.choices = finalizeChoices(createDraft.choices);
       } else {
         payload.choices = null;
       }
@@ -314,12 +430,17 @@ export default function ClientFieldsPage() {
               <label className="block text-xs text-zinc-500 mb-1">Type</label>
               <select
                 value={createDraft.field_type}
-                onChange={(e) =>
+                onChange={(e) => {
+                  const field_type = e.target.value as FieldType;
                   setCreateDraft((d) => ({
                     ...d,
-                    field_type: e.target.value as FieldType,
-                  }))
-                }
+                    field_type,
+                    choices:
+                      field_type === "choice" && d.choices.length === 0
+                        ? [emptyChoice()]
+                        : d.choices,
+                  }));
+                }}
                 className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100"
               >
                 {FIELD_TYPES.map((t) => (
@@ -401,21 +522,11 @@ export default function ClientFieldsPage() {
             </div>
             {createDraft.field_type === "choice" && (
               <div className="sm:col-span-2">
-                <label className="block text-xs text-zinc-500 mb-1">
-                  Choices (one per line; optional{" "}
-                  <code className="text-zinc-400">value|Label</code>)
-                </label>
-                <textarea
-                  value={createDraft.choicesText}
-                  onChange={(e) =>
-                    setCreateDraft((d) => ({
-                      ...d,
-                      choicesText: e.target.value,
-                    }))
+                <ChoicesEditor
+                  choices={createDraft.choices}
+                  onChange={(choices) =>
+                    setCreateDraft((d) => ({ ...d, choices }))
                   }
-                  rows={4}
-                  placeholder={"low|Low\nmedium|Medium"}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 font-mono"
                 />
               </div>
             )}
@@ -519,6 +630,16 @@ export default function ClientFieldsPage() {
                               className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100"
                             />
                           </div>
+                          {editDraft.field_type === "choice" && (
+                            <div className="sm:col-span-2">
+                              <ChoicesEditor
+                                choices={editDraft.choices}
+                                onChange={(choices) =>
+                                  setEditDraft({ ...editDraft, choices })
+                                }
+                              />
+                            </div>
+                          )}
                           <div className="flex items-center gap-4">
                             <label className="flex items-center gap-2 text-sm text-zinc-300">
                               <input
