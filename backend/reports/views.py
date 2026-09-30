@@ -1,7 +1,7 @@
 import json
 import re
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.http import StreamingHttpResponse
 from django.conf import settings
 from django.shortcuts import get_object_or_404
@@ -52,6 +52,12 @@ class ReportTemplateViewSet(viewsets.ModelViewSet):
         client_id = self.request.query_params.get("client")
         if client_id:
             qs = qs.filter(client_id=client_id)
+        # Templates usable for an assessment: that portfolio's templates + global default.
+        for_client = self.request.query_params.get("for_client")
+        if for_client:
+            qs = qs.filter(
+                Q(client_id=for_client) | Q(is_default=True, client__isnull=True)
+            )
         is_default = self.request.query_params.get("is_default")
         if is_default is not None:
             qs = qs.filter(is_default=is_default.lower() in ("1", "true", "yes"))
@@ -140,6 +146,11 @@ class ReportViewSet(viewsets.ModelViewSet):
         template version, creates answer rows for every question, then streams
         the model response as SSE. On completion, parses structured JSON into
         ReportAnswer rows and caches concatenated markdown on report.content.
+
+        Optional JSON body:
+          - template_version: UUID of a specific version to pin
+          - template: UUID of a template (uses its latest version)
+        Explicit body values override any previously pinned version.
         """
         report = self.get_object()
         assessment = report.assessment
@@ -152,7 +163,12 @@ class ReportViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            template_version = _resolve_template_version(report, assessment)
+            template_version = _resolve_template_version(
+                report,
+                assessment,
+                template_id=request.data.get("template"),
+                template_version_id=request.data.get("template_version"),
+            )
         except TemplateResolutionError as exc:
             return Response(
                 {"error": str(exc)},
@@ -266,15 +282,56 @@ class TemplateResolutionError(Exception):
     """Raised when no suitable template version can be resolved for a report."""
 
 
-def _resolve_template_version(report, assessment):
+def _latest_version_for_template(template):
+    """Return the latest version of a template, or None."""
+    return (
+        template.versions.order_by("-version_number")
+        .prefetch_related("sections__questions")
+        .first()
+    )
+
+
+def _resolve_template_version(
+    report,
+    assessment,
+    template_id=None,
+    template_version_id=None,
+):
     """
     Return the template version to use for generation.
 
-    Prefer an already-pinned version. Otherwise:
-      1. Latest version of a client-specific template
-      2. Latest version of the global default template
-      3. Raise TemplateResolutionError
+    Resolution order:
+      1. Explicit template_version_id from the request
+      2. Latest version of an explicit template_id from the request
+      3. Already-pinned report.template_version
+      4. Latest version of a client-specific template
+      5. Latest version of the global default template
+      6. Raise TemplateResolutionError
     """
+    if template_version_id:
+        try:
+            return ReportTemplateVersion.objects.prefetch_related(
+                "sections__questions"
+            ).get(pk=template_version_id)
+        except ReportTemplateVersion.DoesNotExist as exc:
+            raise TemplateResolutionError(
+                "Selected template version was not found."
+            ) from exc
+
+    if template_id:
+        try:
+            template = ReportTemplate.objects.get(pk=template_id)
+        except ReportTemplate.DoesNotExist as exc:
+            raise TemplateResolutionError(
+                "Selected template was not found."
+            ) from exc
+        version = _latest_version_for_template(template)
+        if version:
+            return version
+        raise TemplateResolutionError(
+            f"Template '{template.name}' has no versions yet."
+        )
+
     if report.template_version_id:
         return ReportTemplateVersion.objects.prefetch_related(
             "sections__questions"
@@ -286,11 +343,7 @@ def _resolve_template_version(report, assessment):
         .first()
     )
     if client_template:
-        client_version = (
-            client_template.versions.order_by("-version_number")
-            .prefetch_related("sections__questions")
-            .first()
-        )
+        client_version = _latest_version_for_template(client_template)
         if client_version:
             return client_version
 
@@ -299,11 +352,7 @@ def _resolve_template_version(report, assessment):
         client__isnull=True,
     ).first()
     if default_template:
-        default_version = (
-            default_template.versions.order_by("-version_number")
-            .prefetch_related("sections__questions")
-            .first()
-        )
+        default_version = _latest_version_for_template(default_template)
         if default_version:
             return default_version
 

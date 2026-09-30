@@ -34,20 +34,67 @@ interface Report {
   created_at: string;
 }
 
+interface TemplateOption {
+  id: string;
+  name: string;
+  client: string | null;
+  client_name: string | null;
+  is_default: boolean;
+  version_count?: number;
+}
+
+interface VersionOption {
+  id: string;
+  version_number: number;
+  section_count: number;
+}
+
 export default function AssessmentDetailPage() {
   const { id } = useParams();
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
+  const [templates, setTemplates] = useState<TemplateOption[]>([]);
+  const [versions, setVersions] = useState<VersionOption[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [selectedVersionId, setSelectedVersionId] = useState("");
   const [generating, setGenerating] = useState(false);
   const [streamContent, setStreamContent] = useState("");
   const streamRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    apiFetch(`/api/assessments/${id}/`).then(setAssessment);
+    apiFetch(`/api/assessments/${id}/`).then((data: Assessment) => {
+      setAssessment(data);
+      apiFetch(`/api/report-templates/?for_client=${data.client}`).then(
+        (tpls: TemplateOption[]) => {
+          setTemplates(tpls);
+          // Prefer a client-specific template with versions, else the default.
+          const preferred =
+            tpls.find((t) => t.client && (t.version_count ?? 0) > 0) ||
+            tpls.find((t) => t.is_default && (t.version_count ?? 0) > 0) ||
+            tpls.find((t) => (t.version_count ?? 0) > 0) ||
+            tpls[0];
+          if (preferred) setSelectedTemplateId(preferred.id);
+        }
+      );
+    });
     apiFetch(`/api/evidence/?assessment=${id}`).then(setEvidence);
     apiFetch(`/api/reports/?assessment=${id}`).then(setReports);
   }, [id]);
+
+  useEffect(() => {
+    if (!selectedTemplateId) {
+      setVersions([]);
+      setSelectedVersionId("");
+      return;
+    }
+    apiFetch(`/api/report-templates/${selectedTemplateId}/versions/`).then(
+      (data: VersionOption[]) => {
+        setVersions(data);
+        setSelectedVersionId(data[0]?.id ?? "");
+      }
+    );
+  }, [selectedTemplateId]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -81,21 +128,46 @@ export default function AssessmentDetailPage() {
   };
 
   const handleGenerate = async () => {
-    // Create a new report first
+    if (!selectedTemplateId) {
+      alert("Select a report template before generating.");
+      return;
+    }
+    if (!selectedVersionId) {
+      alert("Selected template has no versions. Create a version first.");
+      return;
+    }
+
+    // Create a new report pinned to the chosen template version
     const report = await apiPost("/api/reports/", {
       assessment: id,
       title: "",
       status: "pending",
+      template_version: selectedVersionId,
     });
 
     setGenerating(true);
     setStreamContent("");
 
-    // Stream the generation via SSE
+    // Stream the generation via SSE; pass template_version so generate
+    // explicitly uses the user's choice even if create pinning is ignored.
     const response = await fetch(
       `${API_BASE}/api/reports/${report.id}/generate/`,
-      { method: "POST" }
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          template: selectedTemplateId,
+          template_version: selectedVersionId,
+        }),
+      }
     );
+
+    if (!response.ok) {
+      setGenerating(false);
+      const text = await response.text();
+      alert(`Generation failed: ${text}`);
+      return;
+    }
 
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
@@ -133,6 +205,12 @@ export default function AssessmentDetailPage() {
   };
 
   if (!assessment) return <p className="text-zinc-500">Loading...</p>;
+
+  const canGenerate =
+    !generating &&
+    evidence.length > 0 &&
+    Boolean(selectedTemplateId) &&
+    Boolean(selectedVersionId);
 
   return (
     <div>
@@ -215,11 +293,66 @@ export default function AssessmentDetailPage() {
             <h2 className="font-semibold text-zinc-100">Reports</h2>
             <button
               onClick={handleGenerate}
-              disabled={generating || evidence.length === 0}
+              disabled={!canGenerate}
               className="text-sm px-3 py-1.5 bg-zinc-100 text-zinc-900 rounded hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {generating ? "Generating..." : "Generate Report"}
             </button>
+          </div>
+
+          <div className="mb-4 space-y-3">
+            <div>
+              <label className="block text-xs text-zinc-500 mb-1">
+                Template
+              </label>
+              <select
+                value={selectedTemplateId}
+                onChange={(e) => setSelectedTemplateId(e.target.value)}
+                disabled={generating || templates.length === 0}
+                className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100 disabled:opacity-50"
+              >
+                {templates.length === 0 && (
+                  <option value="">No templates available</option>
+                )}
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                    {t.is_default
+                      ? " (default)"
+                      : t.client_name
+                        ? ` · ${t.client_name}`
+                        : ""}
+                    {(t.version_count ?? 0) === 0 ? " — no versions" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-zinc-500 mb-1">
+                Version
+              </label>
+              <select
+                value={selectedVersionId}
+                onChange={(e) => setSelectedVersionId(e.target.value)}
+                disabled={generating || versions.length === 0}
+                className="w-full bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-100 disabled:opacity-50"
+              >
+                {versions.length === 0 && (
+                  <option value="">No versions for this template</option>
+                )}
+                {versions.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    v{v.version_number} · {v.section_count} sections
+                  </option>
+                ))}
+              </select>
+            </div>
+            {templates.length === 0 && (
+              <p className="text-xs text-zinc-500">
+                Create a template for this portfolio (or seed the global default)
+                before generating.
+              </p>
+            )}
           </div>
 
           {/* Streaming output — SSE chunk shape unchanged */}

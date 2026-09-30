@@ -32,11 +32,14 @@ Reports are generated from **immutable template versions**:
 
 Each report pins a specific version. Generation creates `ReportAnswer` rows and fills them with **one** OpenRouter call that returns JSON for every question.
 
-Template resolution on generate (if no version is pinned):
+Template resolution on generate (if no version is pinned / passed):
 
-1. Latest version of a client-specific template
-2. Else latest version of the global `is_default` template
-3. Else `400`
+1. Explicit `template_version` in the generate request body
+2. Latest version of explicit `template` in the generate request body
+3. Already-pinned `report.template_version`
+4. Latest version of a client-specific template
+5. Else latest version of the global `is_default` template
+6. Else `400`
 
 ## API Endpoints
 
@@ -50,8 +53,8 @@ Template resolution on generate (if no version is pinned):
 | `/api/evidence/?assessment=:id` | GET | Evidence for an assessment |
 | `/api/reports/` | GET, POST | List/create reports (optional `template_version` on create) |
 | `/api/reports/:id/` | GET | Report detail with answers grouped by section |
-| `/api/reports/:id/generate/` | POST | Generate report (SSE stream; one LLM call) |
-| `/api/report-templates/` | GET, POST | List/create templates (`?client=` filters by portfolio) |
+| `/api/reports/:id/generate/` | POST | Generate report (SSE). Optional body: `template` and/or `template_version` |
+| `/api/report-templates/` | GET, POST | List/create templates (`?client=`, `?for_client=` = portfolio + default) |
 | `/api/report-templates/:id/` | GET, PATCH, DELETE | Template metadata (global default cannot be deleted) |
 | `/api/report-templates/:id/versions/` | GET, POST | List versions; create version with nested sections/questions |
 | `/api/report-templates/:id/versions/:version_id/` | GET, DELETE | Version detail; delete a version |
